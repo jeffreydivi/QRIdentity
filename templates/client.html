@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Offline Digital Identity Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1.0, user-scalable=0">
+    <style type="text/css">
+        html {
+            background: #222;
+            color: white;
+            font-family: sans-serif;
+        }
+        .qr {
+            background: white;
+            border-radius: 15px;
+        }
+        h1, .qr {
+            padding: 5px;
+            text-align: center;
+            margin: auto;
+        }
+        button {
+            margin: 50px;
+            padding: 10px;
+            border-radius: 10px;
+            background: black;
+            color: white;
+            border-color: transparent;
+        }
+    </style>
+</head>
+<body>
+    <h1>Client: <span></span></h1>
+    <br>
+    <div class="qr"></div>
+    <button id="reset">Reset</button>
+</body>
+<script src="/static/jsrsasign-all-min.js"></script>
+<script type="text/javascript" src="/static/qr-code-styling.js"></script>
+<script type="text/javascript">
+    const randFragment = () => {
+        let val = (Math.random() * Number.MAX_SAFE_INTEGER * 10).toString(16);
+        return val;
+    }
+
+    const randValue = (rounds) => {
+        if (typeof rounds === "undefined") {
+            let rounds = 10;
+        }
+        let val = "";
+        for (let i = 0; i < rounds; i++) {
+            val += randFragment();
+        }
+        return btoa(val);
+    }
+
+    const generateKeys = () => {
+        // From: https://kjur.github.io/jsrsasign/sample/sample-ecdsa.html
+        // Licensed under MIT license.
+            
+        let ec = new KJUR.crypto.ECDSA({"curve": "secp256r1"});
+        let keypair = ec.generateKeyPairHex();
+
+        return {
+            "pub": keypair.ecpubhex,
+            "priv": keypair.ecprvhex
+        }
+    }
+
+    const registerDevice = (pubkey, uid, name) => {
+        fetch(`/enroll/${uid}/`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                "name": name,
+                "pubkey": pubkey
+            })
+        })
+    }
+
+    const generateQRString = (privkey, uid) => {
+        // Get timestamp.
+        const time = Date.now().toString();
+
+        let sig = new KJUR.crypto.Signature({"alg": "SHA256withECDSA"});
+        sig.init({d: privkey, curve: "secp256r1"});
+        sig.updateString(time);
+        let sig_str = sig.sign();
+
+        return `${btoa(time)}.${sig_str}.${uid}`;
+    }
+
+    const updateQRCode = (text) => {
+        const qrCode = new QRCodeStyling({
+            width: 350,
+            height: 350,
+            type: "svg",
+            data: text,
+            dotsOptions: {
+                color: "black",
+                type: "rounded"
+            },
+            backgroundOptions: {
+                color: "transparent",
+            },
+            imageOptions: {
+                crossOrigin: "anonymous",
+                margin: 5,
+                imageSize: 0.5
+            }
+        });
+
+        document.querySelector(".qr").innerHTML = "";
+        qrCode.append(document.querySelector(".qr"));
+    }
+
+    const main = async () => {
+        let name = localStorage.getItem("name");
+        let privkey = localStorage.getItem("privkey");
+        if (!privkey || !name) {
+            name = prompt("Enter name");
+            localStorage.setItem("name", name);
+            localStorage.setItem("uid", randValue(1));
+
+            // Generate keys
+            let keys = generateKeys()
+            privkey = keys["priv"]
+
+            // Register with remote server, to allow generation.
+            // This, by default, will give the user 1 Point.
+            // Points are just a concept for the demo to show "usage" of a resource.
+            await registerDevice(keys["pub"], localStorage.getItem("uid"), name);
+
+            // Store private key; we don't need public key anymore.
+            localStorage.setItem("privkey", privkey);
+        }
+
+        let uid = localStorage.getItem("uid");
+
+        document.querySelector("span").innerText = name;
+
+        // Generate QR code.
+        const update = () => {
+            let qrData = generateQRString(privkey, uid);
+            updateQRCode(qrData);
+        }
+        update();
+        setInterval(update, 2000);
+    }
+
+    document.getElementById("reset").onclick = evt => {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(registrations => {
+                for (const registration of registrations) {
+                    registration.unregister();
+                } 
+            });
+        } else {
+            alert("No service worker support. Use HTTPS!");
+        }
+
+        localStorage.removeItem("name");
+        localStorage.removeItem("privkey");
+        location.reload();
+    }
+
+    window.onload = main;
+
+
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register("/sw.js");
+    }
+</script>
+</html>

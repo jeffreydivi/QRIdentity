@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Offline Digital Identity Demo</title>
+    <style type="text/css">
+        html, body {
+            background: #222;
+            color: white;
+            font-family: sans-serif;
+            margin: 0;
+        }
+        video, h1, h2, h3 {
+            margin: auto;
+            display: block;
+            text-align: center;
+            padding: 10px;
+        }
+        video {
+            border-radius: 20px!important;
+            height: 400px;
+        }
+        h1 {
+            font-size: 64px;
+        }
+        h2 {
+            font-size: 42px;
+        }
+        h3 {
+            font-size: 120px;
+            margin: 0;
+            font-family: "Segoe UI Symbol", math, monospace;
+        }
+        .main.main {
+            display: block;
+        }
+        .page {
+            display: none;
+            height: 100vh;
+            width: 100vw;
+        }
+        .pass {
+            background: #51cd7f;
+        }
+        .fail {
+            background: #cf565f;
+        }
+    </style>
+</head>
+<body>
+    <div class="page main">
+        <h1>Server</h1>
+        <br>
+        <video></video>
+    </div>
+    <div class="page pass">
+        <h1>Verified!</h1>
+        <h3>✔️&#xFE0E;</h3>
+        <h2>User is <span id="passUser"></span></h2>
+    </div>
+    <div class="page fail">
+        <h1>Failed to Verify</h1>
+        <h3>❌&#xFE0E;</h3>
+        <h2><span id="failMessage"></span></h2>
+    </div>
+</body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsrsasign/8.0.20/jsrsasign-all-min.js"></script>
+<script src="/static/qr-scanner.umd.min.js"></script>
+<script type="text/javascript">
+    const displayPage = (page) => {
+        const allPages = document.querySelectorAll(".page");
+        for (let i = 0; i < allPages.length; i++) {
+            allPages[i].style.display = "none";
+        }
+        document.querySelector("." + page).style.display = "block";
+    }
+
+    const scannedCode = async (result) => {
+        // Enter load mode...
+        qrScanner.stop();
+
+        let data = result.data.split(".");
+
+        let timestamp = atob(data[0]);
+        let sig = data[1];
+        let uid = data[2];
+
+        console.log(timestamp, sig, uid)
+
+        let req = await fetch("/list/");
+        let json = await req.json();
+
+        try {
+            let user = json[uid];
+            console.log(user);
+            let name = user["name"];
+            let pubkey = user["pubkey"];
+
+            // <Debug>
+            console.log("pubkey: >" + pubkey + "<");
+            console.log("message: >" + timestamp + "<");
+            console.log("sig: >" + sig + "<");
+            // </Debug>
+
+            let sigObj = new KJUR.crypto.Signature({"alg": "SHA256withECDSA", "prov": "cryptojs/jsrsa"});
+            sigObj.init({xy: pubkey, curve: "secp256r1"});
+            sigObj.updateString(timestamp);
+            let isValid = sigObj.verify(sig);
+            console.log(isValid)
+
+            document.getElementById("passUser").innerText = name;
+            
+            if (isValid) {
+                let tooLateDate = Date.now() + (1000 * 4);
+                let ageSeconds = (Date.now() - parseInt(timestamp)) / 1000;
+                console.log("Age: " + ageSeconds);
+                displayPage(ageSeconds < 10 ? "pass" : "fail");
+                setTimeout(_ => {
+                    document.getElementById("failMessage").innerText = "Timestamp too old.";
+                    displayPage("main")
+                    qrScanner.start();
+                }, 2500);
+            } else {
+                displayPage("fail");
+                setTimeout(_ => {
+                    document.getElementById("failMessage").innerText = "Signature tampered with.";
+                    displayPage("main")
+                    qrScanner.start();
+                }, 2500);
+            }
+
+
+        } catch(err) {
+            console.error(err);
+            document.getElementById("failMessage").innerText = "User spoofed.";
+            qrScanner.stop();
+            displayPage("fail");
+            setTimeout(_ => {
+                displayPage("main")
+                qrScanner.start();
+            }, 2500);
+        } 
+    }
+
+    const videoElem = document.querySelector("video");
+    let qrScanner = new QrScanner(
+            videoElem,
+            scannedCode,
+            {
+                maxScansPerSecond: 10,
+                highlightScanRegion: true,
+                returnDetailedScanResult: true
+            },
+        );;
+
+    const main = async () => {
+        qrScanner.start();
+    }
+
+    window.onload = main; 
+</script>
+</html>
